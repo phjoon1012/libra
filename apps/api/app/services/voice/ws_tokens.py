@@ -17,10 +17,11 @@ from __future__ import annotations
 
 import secrets
 import time
+import uuid
 from dataclasses import dataclass
 
 _TTL_SECONDS = 60.0
-_MAX_INSTRUCTIONS = 4000
+_MAX_INSTRUCTIONS = 8000  # raised: recall block can push baseline past 4k
 
 
 @dataclass(slots=True)
@@ -30,6 +31,9 @@ class TokenData:
     stability: float
     similarity_boost: float
     speed: float
+    session_id: uuid.UUID
+    user_id: str
+    memory_enabled: bool
 
 
 _REGISTRY: dict[str, TokenData] = {}
@@ -41,6 +45,9 @@ def mint(
     stability: float,
     similarity_boost: float,
     speed: float,
+    session_id: uuid.UUID,
+    user_id: str,
+    memory_enabled: bool = True,
 ) -> str:
     """Create a single-use token. Returns the opaque token string."""
     _expire_old()
@@ -53,6 +60,9 @@ def mint(
         stability=stability,
         similarity_boost=similarity_boost,
         speed=speed,
+        session_id=session_id,
+        user_id=user_id,
+        memory_enabled=memory_enabled,
     )
     return token
 

@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the v0.1 system and the conceptual layers
+This document describes the v0.3 system and the conceptual layers
 everything else will plug into.
 
 ## Conceptual layers
@@ -23,7 +23,8 @@ everything else will plug into.
          │               │               │               │
    ┌─────▼─────┐  ┌──────▼──────┐  ┌─────▼─────┐  ┌──────▼──────┐
    │  Memory   │  │   Tools     │  │   Voice   │  │ Event/Bus   │
-   │ (v0.2 +)  │  │  (v0.3 +)   │  │ Providers │  │ (Redis +)   │
+   │ (Redis +  │  │  (v0.3 +)   │  │ Providers │  │ (Redis +)   │
+   │ pgvector) │  │             │  │           │  │             │
    └───────────┘  └─────────────┘  └───────────┘  └─────────────┘
                                          │
                                          │ ephemeral client_secret
@@ -61,22 +62,92 @@ Rules of the road:
 ```text
 apps/api/app/
   main.py                 FastAPI app factory, CORS, route mounting
-  core/config.py          Pydantic settings (env-driven)
+  core/
+    config.py             Pydantic settings (env-driven)
+    db.py                 Async SQLAlchemy engine + session factory
+    redis.py              Async Redis client
   api/routes/
     health.py             /api/health, /api/ready
-    voice.py              /api/voice/providers, /api/voice/session
-    memory.py             placeholder
-    tools.py              placeholder
-  schemas/voice.py        Wire shapes (mirrors @libra/shared-types)
+    voice.py              /api/voice/* (providers, session, turn, end, WS)
+    memory.py             /api/memory/* (facts CRUD + semantic search)
+    tools.py              /api/tools/* (list, execute, permissions)
+    integrations.py       /api/integrations/* (Spotify OAuth + status)
+  models/                 SQLAlchemy ORM (sessions, facts, base,
+                          tool_permissions, spotify_accounts)
+  schemas/                Pydantic wire shapes (voice, memory, tools)
   services/voice/
-    base.py               VoiceProvider ABC + errors
+    base.py               VoiceProvider ABC + SessionContext
     registry.py           id -> provider instance
-    openai_realtime.py    real provider
-    elevenlabs_openai.py  stub provider
-  services/memory/*       placeholder for v0.2
-  services/tools/*        placeholder for v0.3
+    openai_realtime.py    WebRTC session-mint provider
+    elevenlabs_openai.py  Streaming pipeline provider
+    elevenlabs_openai_session.py  WS-side orchestrator (tool-aware)
+    ws_tokens.py          Short-lived single-use WS auth tokens
+  services/memory/
+    service.py            MemoryService façade
+    short_term.py         Redis rolling-window store
+    long_term.py          Postgres + pgvector store
+    embeddings.py         OpenAI embedding wrapper
+    distiller.py          End-of-session fact extractor
+  services/tools/
+    base.py               Tool ABC, ToolResult/Pending/Denied, Context
+    registry.py           Process-wide ToolRegistry singleton
+    permissions.py        Stored permission lookup (per-tool, scoped)
+    executor.py           Single execution chokepoint
+    builtin/              current_time, weather, spotify_*
+  services/integrations/spotify/
+    service.py            OAuth + token refresh + Web API helpers
+    errors.py             Typed Spotify errors
+  alembic/                Migrations (env.py + versions/)
   tests/                  pytest smoke tests
 ```
+
+## Memory flow (v0.2)
+
+```text
+   browser ─turn─► backend orchestrator ─append─► Redis short-term
+                                            │
+                                            └─per LLM call─► pgvector recall
+                                                              │
+                                                              ▼
+                                                       extra system msg
+                                            (transient, not stored in history)
+
+   browser disconnect ─► end_session ─► async distiller task
+                                            │
+                                            ▼
+                                  facts + embeddings → pgvector
+```
+
+See `docs/MEMORY_POLICY.md` for what is stored, when recall happens,
+and the deletion / disable rules.
+
+## Tool flow (v0.3, EL+OAI provider)
+
+```text
+   ┌─ user text from STT
+   │
+   ▼
+LLM round (Responses API streaming, tools=[...])
+   │
+   ├─ text deltas ──► browser + ElevenLabs TTS (streaming)
+   │
+   └─ function_call items ──► ToolExecutor
+                                 │
+                                 ├─ permission check (autorun / ask / denied)
+                                 ├─ tool.run(args, ctx)
+                                 ▼
+                              ToolResult ──► function_call_output
+                                                 │
+                                                 ▼
+                                       next LLM round (previous_response_id)
+                                                 │
+                                                 ▼
+                                           (loop, max 5 rounds)
+```
+
+Browser shows each tool call inline in the transcript via
+`tool_call_started` / `tool_call_completed` / `tool_call_denied` events
+on the same WebSocket. See `docs/TOOLS.md` for full details.
 
 ## Frontend module map
 
@@ -96,11 +167,19 @@ apps/web/src/
   types/voice.ts          re-exports shared types + UI-only types
 ```
 
-## What we are deliberately not doing in v0.1
+## What we are deliberately not doing yet
 
-- No persistent memory. The memory route returns a placeholder.
-- No tool execution. The tools route returns a placeholder.
+- No tools wired into the OpenAI Realtime provider yet. The browser
+  data-channel relay lands in v0.3.1. EL+OAI is the tool-capable path
+  today.
+- No approval-await loop for "ask" tools. The framework supports
+  `default_policy="ask"` but the WS-side approval flow ships in v0.3.1.
+  All currently-shipped tools are `autorun` (consent for Spotify is the
+  OAuth connection itself).
+- No `fetch_url` or `read_file` yet — both land in v0.3.1.
 - No desktop/browser automation, smart home, Pi satellite, or vision.
-- No auth/user model. Single-user, local-only.
+- No auth/user model. Single-user, local-only. The `facts.user_id`,
+  `tool_permissions.user_id`, and `spotify_accounts.user_id` columns
+  exist so multi-user can land non-destructively later.
 
 When any of these change, update this file.

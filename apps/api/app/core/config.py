@@ -51,6 +51,53 @@ class Settings(BaseSettings):
         default="gpt-4o-mini-transcribe", alias="OPENAI_TRANSCRIPTION_MODEL"
     )
 
+    # ---- Memory (v0.2) -----------------------------------------------------
+    openai_embedding_model: str = Field(
+        default="text-embedding-3-small", alias="OPENAI_EMBEDDING_MODEL"
+    )
+    embedding_dim: int = Field(default=1536, alias="LIBRA_EMBEDDING_DIM")
+    memory_short_term_max_turns: int = Field(
+        default=40, alias="LIBRA_MEMORY_SHORT_TERM_MAX_TURNS"
+    )
+    memory_recall_top_k: int = Field(
+        default=5, alias="LIBRA_MEMORY_RECALL_TOP_K"
+    )
+    memory_default_user_id: str = Field(
+        default="default", alias="LIBRA_MEMORY_DEFAULT_USER_ID"
+    )
+    memory_distill_model: str = Field(
+        default="gpt-4.1-mini", alias="LIBRA_MEMORY_DISTILL_MODEL"
+    )
+
+    # ---- Tools (v0.3) ------------------------------------------------------
+    tools_enabled: bool = Field(default=True, alias="LIBRA_TOOLS_ENABLED")
+    tools_max_iterations: int = Field(
+        default=5,
+        alias="LIBRA_TOOLS_MAX_ITERATIONS",
+        description="Max tool-loop rounds per user turn before giving up.",
+    )
+    web_search_enabled: bool = Field(
+        default=True,
+        alias="LIBRA_WEB_SEARCH_ENABLED",
+        description="Enable OpenAI's built-in web_search Responses tool.",
+    )
+
+    # ---- Spotify integration (v0.3) ----------------------------------------
+    spotify_client_id: str | None = Field(default=None, alias="SPOTIFY_CLIENT_ID")
+    spotify_client_secret: str | None = Field(
+        default=None, alias="SPOTIFY_CLIENT_SECRET"
+    )
+    spotify_redirect_uri: str = Field(
+        default="http://127.0.0.1:8000/api/integrations/spotify/auth/callback",
+        alias="SPOTIFY_REDIRECT_URI",
+    )
+    spotify_post_auth_redirect: str = Field(
+        default="http://localhost:3000/?spotify=connected",
+        alias="SPOTIFY_POST_AUTH_REDIRECT",
+        description="Where to bounce the browser after a successful Spotify "
+        "OAuth callback. Typically the Libra UI origin.",
+    )
+
     # ---- Infrastructure ----------------------------------------------------
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")

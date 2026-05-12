@@ -1,8 +1,18 @@
 from __future__ import annotations
 
+import os
+
+import pytest
 from fastapi.testclient import TestClient
 
 from app.main import app
+
+# /api/voice/session now mints a memory session row, which requires a
+# live Postgres. Tests that don't need that stay unconditionally on.
+_HAS_DB = bool(os.environ.get("DATABASE_URL"))
+needs_db = pytest.mark.skipif(
+    not _HAS_DB, reason="DATABASE_URL not set; skip DB-bound route test"
+)
 
 
 def test_list_providers_includes_both() -> None:
@@ -20,6 +30,7 @@ def test_session_unknown_provider_returns_404() -> None:
         assert resp.status_code == 422
 
 
+@needs_db
 def test_session_elevenlabs_requires_keys() -> None:
     with TestClient(app) as client:
         resp = client.post(

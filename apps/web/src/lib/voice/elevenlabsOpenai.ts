@@ -2,7 +2,8 @@ import { createVoiceSession } from "@/lib/api";
 import type {
   ConnectionState,
   ElevenLabsOpenAISession,
-  TranscriptEntry,
+  MessageEntry,
+  ToolEntryState,
 } from "@/types/voice";
 import type { LevelListener, VoiceClient, VoiceClientOptions } from "./types";
 
@@ -21,7 +22,7 @@ import type { LevelListener, VoiceClient, VoiceClientOptions } from "./types";
  *   5. Receive JSON control events (transcripts, state, barge-in).
  */
 export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceClient {
-  const { events, instructions, voiceSettings, audioDevices } = opts;
+  const { events, instructions, voiceSettings, audioDevices, memoryEnabled } = opts;
 
   // --- transport / audio state ----------------------------------------
   let ws: WebSocket | null = null;
@@ -52,13 +53,53 @@ export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceCli
     setState("error");
   };
 
-  const emit = (entry: Omit<TranscriptEntry, "id" | "ts"> & { id?: string }) => {
+  const emit = (entry: Omit<MessageEntry, "id" | "ts"> & { id?: string }) => {
     events.onTranscript({
       id: entry.id ?? crypto.randomUUID(),
       ts: Date.now(),
       role: entry.role,
       text: entry.text,
       partial: entry.partial,
+    });
+  };
+
+  // Per-call wall-clock start so we can report duration on completion.
+  const toolStarts = new Map<string, number>();
+
+  const emitTool = (params: {
+    callId: string;
+    toolName: string;
+    state: ToolEntryState;
+    args?: Record<string, unknown>;
+    content?: string;
+    data?: unknown;
+    error?: boolean;
+    reason?: string;
+    scopeKey?: string;
+  }) => {
+    const now = Date.now();
+    if (params.state === "started") {
+      toolStarts.set(params.callId, now);
+    }
+    const startedAt = toolStarts.get(params.callId);
+    const durationMs =
+      params.state !== "started" && startedAt
+        ? now - startedAt
+        : undefined;
+    events.onTranscript({
+      id: params.callId,
+      kind: "tool",
+      ts: now,
+      toolName: params.toolName,
+      callId: params.callId,
+      args: params.args ?? {},
+      state: params.state,
+      content: params.content,
+      data: params.data,
+      error: params.error,
+      reason: params.reason,
+      scopeKey: params.scopeKey,
+      durationMs,
     });
   };
 
@@ -159,6 +200,43 @@ export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceCli
         case "flush_audio":
           flushPlayback();
           break;
+        case "tool_call_started":
+          emitTool({
+            callId: (evt.callId as string) ?? "",
+            toolName: (evt.tool as string) ?? "tool",
+            state: "started",
+            args: (evt.args as Record<string, unknown>) ?? {},
+          });
+          break;
+        case "tool_call_completed":
+          emitTool({
+            callId: (evt.callId as string) ?? "",
+            toolName: (evt.tool as string) ?? "tool",
+            state: "completed",
+            args: (evt.args as Record<string, unknown>) ?? {},
+            content: evt.content as string | undefined,
+            data: evt.data,
+            error: evt.error === true,
+          });
+          break;
+        case "tool_call_denied":
+          emitTool({
+            callId: (evt.callId as string) ?? "",
+            toolName: (evt.tool as string) ?? "tool",
+            state: "denied",
+            reason: (evt.reason as string) ?? "denied",
+          });
+          break;
+        case "tool_call_pending":
+          emitTool({
+            callId: (evt.callId as string) ?? "",
+            toolName: (evt.tool as string) ?? "tool",
+            state: "pending",
+            args: (evt.args as Record<string, unknown>) ?? {},
+            scopeKey: evt.scopeKey as string | undefined,
+            reason: (evt.note as string) ?? undefined,
+          });
+          break;
         case "error":
           fail(new Error((evt.message as string) ?? "Pipeline error"));
           break;
@@ -228,6 +306,7 @@ export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceCli
       const session = (await createVoiceSession("elevenlabs-openai", {
         instructions,
         voiceSettings,
+        memoryEnabled,
       })) as ElevenLabsOpenAISession;
       log("2/6 got session", { wsUrl: session.wsUrl });
       outSampleRate = session.outputSampleRate;

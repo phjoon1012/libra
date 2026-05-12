@@ -2,9 +2,20 @@
 
 A modular personal AI companion.
 
-**v0.1 milestone:** conversational voice shell. Futuristic dashboard, swappable
-voice providers, FastAPI orchestrator, and Dockerized infra. Memory, tools,
-desktop control, smart home, and vision come later.
+**Current milestone — v0.3:** tools. Backend tool registry with a permission
+layer, server-orchestrated tool-call loop inside the EL+OAI streaming pipeline,
+inline tool-call rendering in the transcript, and a full Spotify integration
+(OAuth, transport controls, search, now-playing). Built-in `current_time` and
+`weather` ship out of the box; OpenAI's hosted `web_search` is wired in too.
+
+**v0.2** delivered: persistent memory (Postgres + pgvector, Redis short-term,
+end-of-session distillation, Memory view, per-session toggle).
+
+**v0.1** delivered: conversational voice shell, swappable voice providers,
+FastAPI orchestrator, and Dockerized infra.
+
+Future: OpenAI Realtime tool relay, approval-await UX, desktop control, smart
+home, satellites, vision.
 
 ---
 
@@ -14,9 +25,12 @@ desktop control, smart home, and vision come later.
 | ----------- | ------------------------------------------------------- |
 | Frontend    | Next.js 15 (App Router), TypeScript, Tailwind CSS       |
 | Backend     | FastAPI, Python 3.12, Pydantic v2, `uv` for packaging   |
-| Voice (v0.1)| OpenAI Realtime via browser WebRTC                      |
-| DB          | Postgres 16 + `pgvector` (extension pre-enabled)        |
-| Cache/bus   | Redis 7                                                 |
+| Voice       | OpenAI Realtime (WebRTC) or ElevenLabs + OpenAI (WS)    |
+| DB          | Postgres 16 + `pgvector`, SQLAlchemy 2 async, Alembic   |
+| Cache/bus   | Redis 7 (short-term memory, future event bus)           |
+| Memory      | `text-embedding-3-small` (1536d) over HNSW cosine index |
+| Tools       | Server-side registry, OpenAI tool-format JSON Schemas   |
+| Integrations| Spotify Web API (OAuth2 + token refresh)                |
 | Infra       | Docker Compose, Makefile                                |
 | Workspace   | pnpm workspaces (`apps/*`, `packages/*`)                |
 
@@ -62,6 +76,7 @@ cp .env.example .env
 
 ```bash
 make dev      # builds and starts api, web, postgres, redis
+make migrate  # apply Alembic migrations (first run only)
 make logs     # tail logs
 make down     # stop everything
 ```
@@ -71,6 +86,11 @@ make down     # stop everything
 - Docs: <http://localhost:8000/docs>
 
 Click **Connect** in the dashboard, allow mic access, and start talking.
+
+After each conversation, an end-of-session distiller extracts a few
+durable facts and writes them to long-term memory. The **Memory** tab
+in the dashboard lets you search, add, and delete entries. Disable the
+Memory toggle in Settings to opt the current session out entirely.
 
 ### Running pieces outside Docker
 
@@ -108,7 +128,6 @@ pnpm --filter @libra/web dev
 
 See `docs/ROADMAP.md`. Short version:
 
-- **v0.2** persistent memory (Postgres + pgvector, Redis short-term)
 - **v0.3** tool execution behind a permission layer
 - **v0.4** desktop automation
 - **v0.5** Home Assistant integration

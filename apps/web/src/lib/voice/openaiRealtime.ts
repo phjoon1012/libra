@@ -1,4 +1,4 @@
-import { createVoiceSession } from "@/lib/api";
+import { captureTurn, createVoiceSession, endVoiceSession } from "@/lib/api";
 import type {
   ConnectionState,
   OpenAIRealtimeSession,
@@ -22,7 +22,7 @@ import type { LevelListener, VoiceClient, VoiceClientOptions } from "./types";
  * The long-lived OPENAI_API_KEY never reaches the browser.
  */
 export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClient {
-  const { events, voice, instructions, audioDevices } = opts;
+  const { events, voice, instructions, audioDevices, memoryEnabled } = opts;
 
   let pc: RTCPeerConnection | null = null;
   let dc: RTCDataChannel | null = null;
@@ -36,6 +36,8 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
 
   let muted = false;
   let state: ConnectionState = "disconnected";
+  let sessionId: string | null = null;
+  let pendingAssistantText = "";
 
   function setState(next: ConnectionState) {
     if (next === state) return;
@@ -141,18 +143,30 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
       case "response.audio_transcript.delta":
       case "response.output_audio_transcript.delta": {
         const delta = (evt.delta as string) ?? "";
-        if (delta) emit({ role: "assistant", text: delta, partial: true });
+        if (delta) {
+          pendingAssistantText += delta;
+          emit({ role: "assistant", text: delta, partial: true });
+        }
         break;
       }
       case "response.audio_transcript.done":
       case "response.output_audio_transcript.done": {
-        const text = (evt.transcript as string) ?? "";
-        if (text) emit({ role: "assistant", text });
+        const text = (evt.transcript as string) ?? pendingAssistantText;
+        if (text) {
+          emit({ role: "assistant", text });
+          if (sessionId && memoryEnabled !== false)
+            captureTurn(sessionId, "assistant", text);
+        }
+        pendingAssistantText = "";
         break;
       }
       case "conversation.item.input_audio_transcription.completed": {
         const text = (evt.transcript as string) ?? "";
-        if (text) emit({ role: "user", text });
+        if (text) {
+          emit({ role: "user", text });
+          if (sessionId && memoryEnabled !== false)
+            captureTurn(sessionId, "user", text);
+        }
         break;
       }
       case "response.done":
@@ -180,10 +194,13 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
       const session = (await createVoiceSession("openai-realtime", {
         voice,
         instructions,
+        memoryEnabled,
       })) as OpenAIRealtimeSession;
+      sessionId = session.sessionId;
       log("2/8 got session", {
         model: session.model,
         hasSecret: Boolean(session.clientSecret),
+        sessionId,
       });
 
       if (!session.clientSecret) {
@@ -290,14 +307,10 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
 
       dc = pc.createDataChannel("oai-events");
       dc.onopen = () => {
-        if (instructions && dc?.readyState === "open") {
-          dc.send(
-            JSON.stringify({
-              type: "session.update",
-              session: { instructions },
-            }),
-          );
-        }
+        // Do NOT re-send `instructions` here. The backend has already
+        // configured the session with an augmented system prompt that
+        // includes recalled memory context; pushing the UI's bare prompt
+        // here would overwrite that on OpenAI's side and erase recall.
         setState("listening");
       };
       dc.onmessage = (e) => {
@@ -343,6 +356,7 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
   }
 
   async function disconnect() {
+    const closedSession = sessionId;
     try {
       teardownAnalyser();
       dc?.close();
@@ -358,7 +372,12 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
         sinkEl.remove();
         sinkEl = null;
       }
+      sessionId = null;
+      pendingAssistantText = "";
       setState("disconnected");
+    }
+    if (closedSession && memoryEnabled !== false) {
+      endVoiceSession(closedSession).catch(() => undefined);
     }
   }
 

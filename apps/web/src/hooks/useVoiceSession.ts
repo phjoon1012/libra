@@ -21,6 +21,7 @@ interface UseVoiceSessionOptions {
   instructions?: string;
   voiceSettings?: VoiceSettings;
   audioDevices?: ResolvedAudioDevices;
+  memoryEnabled?: boolean;
 }
 
 export function useVoiceSession({
@@ -29,6 +30,7 @@ export function useVoiceSession({
   instructions,
   voiceSettings,
   audioDevices,
+  memoryEnabled,
 }: UseVoiceSessionOptions) {
   const [state, setState] = useState<ConnectionState>("disconnected");
   const [transcript, setTranscript] = useState<TranscriptEntry[]>([]);
@@ -42,16 +44,45 @@ export function useVoiceSession({
       onStateChange: (s: ConnectionState) => setState(s),
       onTranscript: (entry: TranscriptEntry) => {
         setTranscript((prev) => {
+          // Tool events are merged in place by their stable callId so
+          // started -> completed updates the same row.
+          if (entry.kind === "tool") {
+            const idx = prev.findIndex(
+              (e) => e.kind === "tool" && e.id === entry.id,
+            );
+            if (idx >= 0) {
+              const merged = { ...prev[idx], ...entry };
+              const next = prev.slice();
+              next[idx] = merged;
+              return next;
+            }
+            return [...prev, entry];
+          }
+          // Message merge logic (partial deltas collapse into one row).
           if (entry.partial) {
             const last = prev[prev.length - 1];
-            if (last && last.role === entry.role && last.partial) {
-              const merged = { ...last, text: last.text + entry.text, ts: entry.ts };
+            if (
+              last &&
+              last.kind !== "tool" &&
+              last.role === entry.role &&
+              last.partial
+            ) {
+              const merged = {
+                ...last,
+                text: last.text + entry.text,
+                ts: entry.ts,
+              };
               return [...prev.slice(0, -1), merged];
             }
             return [...prev, entry];
           }
           const last = prev[prev.length - 1];
-          if (last && last.role === entry.role && last.partial) {
+          if (
+            last &&
+            last.kind !== "tool" &&
+            last.role === entry.role &&
+            last.partial
+          ) {
             return [...prev.slice(0, -1), { ...entry, partial: false }];
           }
           return [...prev, { ...entry, partial: false }];
@@ -79,10 +110,19 @@ export function useVoiceSession({
       instructions,
       voiceSettings,
       audioDevices,
+      memoryEnabled,
     });
     clientRef.current = client;
     await client.connect();
-  }, [provider, voice, instructions, voiceSettings, audioDevices, events]);
+  }, [
+    provider,
+    voice,
+    instructions,
+    voiceSettings,
+    audioDevices,
+    memoryEnabled,
+    events,
+  ]);
 
   const disconnect = useCallback(async () => {
     const client = clientRef.current;

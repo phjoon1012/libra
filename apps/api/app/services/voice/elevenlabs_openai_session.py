@@ -34,7 +34,7 @@ import asyncio
 import base64
 import json
 import logging
-from collections.abc import AsyncIterator
+import uuid
 from contextlib import suppress
 from typing import Any
 
@@ -44,6 +44,18 @@ from openai import AsyncOpenAI
 from websockets.asyncio.client import ClientConnection
 
 from app.core.config import Settings
+from app.core.db import session_scope
+from app.core.redis import get_redis
+from app.services.memory.service import MemoryService
+from app.services.tools import (
+    ExecutionContext,
+    ToolDenied,
+    ToolExecutor,
+    ToolPending,
+    ToolResult,
+    get_registry,
+    register_builtin_tools,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -69,6 +81,9 @@ class ElevenLabsOpenAISession:
         voice_stability: float = 0.45,
         voice_similarity_boost: float = 0.75,
         voice_speed: float = 1.0,
+        session_id: uuid.UUID,
+        user_id: str,
+        memory_enabled: bool = True,
     ) -> None:
         self.browser = browser_ws
         self.settings = settings
@@ -79,11 +94,15 @@ class ElevenLabsOpenAISession:
         self.voice_stability = voice_stability
         self.voice_similarity_boost = voice_similarity_boost
         self.voice_speed = voice_speed
+        self.session_id = session_id
+        self.user_id = user_id
+        self.memory_enabled = memory_enabled
 
         self.openai_client = AsyncOpenAI(api_key=settings.openai_api_key)
         self.stt: ClientConnection | None = None
 
-        # Conversation memory for this session only (no persistence in v0.1).
+        # System prompt already includes any recall context block injected
+        # at session start by the route handler.
         self.history: list[dict[str, str]] = [
             {"role": "system", "content": self.instructions}
         ]
@@ -135,6 +154,7 @@ class ElevenLabsOpenAISession:
             with suppress(Exception):
                 if self.stt is not None:
                     await self.stt.close()
+            await self._finalize_memory()
 
     # ------------------------------------------------------------------ STT
 
@@ -231,6 +251,7 @@ class ElevenLabsOpenAISession:
             if not text:
                 return
             await self._send_event({"type": "user_transcript", "text": text})
+            await self._record_turn("user", text)
             await self._begin_response(text)
         elif etype == "error":
             await self._send_event(
@@ -252,8 +273,17 @@ class ElevenLabsOpenAISession:
         self.history.append({"role": "user", "content": user_text})
         self.response_task = asyncio.create_task(self._run_response(user_text))
 
-    async def _run_response(self, _user_text: str) -> None:
+    async def _run_response(self, user_text: str) -> None:
         await self._send_event({"type": "response_started"})
+        # Per-turn semantic recall. Builds a transient history for this LLM
+        # call only; we do not mutate self.history so future turns aren't
+        # polluted with stale context.
+        recall_block = await self._recall(user_text)
+        if recall_block:
+            await self._send_event(
+                {"type": "memory_recalled", "block": recall_block}
+            )
+        llm_history = self._with_recall(self.history, recall_block)
         assistant_text_parts: list[str] = []
         drain_task: asyncio.Task[None] | None = None
         try:
@@ -264,26 +294,12 @@ class ElevenLabsOpenAISession:
                 # tokens upstream. This is the main latency win.
                 drain_task = asyncio.create_task(self._drain_tts(tts))
                 try:
-                    async for token in self._stream_llm_tokens():
-                        if not token:
-                            continue
-                        assistant_text_parts.append(token)
-                        await self._send_event(
-                            {"type": "assistant_text_delta", "delta": token}
-                        )
-                        with suppress(Exception):
-                            await tts.send(
-                                json.dumps(
-                                    {
-                                        "text": token,
-                                        "try_trigger_generation": True,
-                                    }
-                                )
-                            )
+                    await self._stream_with_tools(
+                        llm_history, tts, assistant_text_parts
+                    )
                     # Signal end-of-text so ElevenLabs flushes + emits isFinal.
                     with suppress(Exception):
                         await tts.send(json.dumps({"text": ""}))
-                    # Wait for the audio tail.
                     await drain_task
                 except BaseException:
                     if drain_task and not drain_task.done():
@@ -306,29 +322,280 @@ class ElevenLabsOpenAISession:
                 await self._send_event(
                     {"type": "assistant_text", "text": text}
                 )
+                await self._record_turn("assistant", text)
             await self._send_event({"type": "response_done"})
 
     # ------------------------------------------------------------------ LLM
 
-    async def _stream_llm_tokens(self) -> AsyncIterator[str]:
-        # Use the Responses API streaming for forward-looking compatibility.
-        stream = await self.openai_client.responses.create(
-            model=self.settings.openai_reasoning_model,
-            input=[
-                {"role": m["role"], "content": m["content"]}  # type: ignore[arg-type]
-                for m in self.history
-            ],
-            stream=True,
+    def _build_tools_arg(self) -> list[dict[str, Any]] | None:
+        """Compose the Responses API ``tools`` argument.
+
+        Includes:
+        - every Tool in the local registry (function tools)
+        - optionally OpenAI's built-in web_search hosted tool
+
+        Returns ``None`` when tools are globally disabled, so the call
+        runs as a vanilla text response (cheaper, no tool framing).
+        """
+        if not self.settings.tools_enabled:
+            return None
+        register_builtin_tools()
+        tools: list[dict[str, Any]] = [
+            t.to_openai_tool() for t in get_registry().list()
+        ]
+        if self.settings.web_search_enabled:
+            tools.append({"type": "web_search_preview"})
+        return tools or None
+
+    async def _stream_with_tools(
+        self,
+        history: list[dict[str, str]],
+        tts: ClientConnection,
+        assistant_text_parts: list[str],
+    ) -> None:
+        """Drive one assistant turn, including any tool-call rounds.
+
+        Loop:
+          1. Stream a Responses API call (tools enabled).
+          2. Text deltas → browser + ElevenLabs in real time.
+          3. Function-call items collected during the stream.
+          4. If any function calls: execute them, append outputs, loop.
+          5. Otherwise: done.
+        """
+        tools_arg = self._build_tools_arg()
+        # First round uses the full message history; subsequent rounds
+        # use previous_response_id + function_call_output items.
+        input_payload: list[dict[str, Any]] = [
+            {"role": m["role"], "content": m["content"]}
+            for m in history
+        ]
+        previous_response_id: str | None = None
+        ctx = ExecutionContext(
+            user_id=self.user_id, session_id=self.session_id
         )
+
+        for _ in range(self.settings.tools_max_iterations):
+            text, tool_calls, response_id = await self._llm_round(
+                input_payload=input_payload,
+                previous_response_id=previous_response_id,
+                tools_arg=tools_arg,
+                tts=tts,
+            )
+            if text:
+                assistant_text_parts.append(text)
+            if not tool_calls:
+                return
+
+            tool_outputs = await self._dispatch_tool_calls(tool_calls, ctx)
+            previous_response_id = response_id
+            input_payload = tool_outputs
+
+        # Hit max iterations without resolution — make sure user isn't
+        # left in the dark.
+        await self._send_event(
+            {
+                "type": "error",
+                "message": "Tool loop exceeded max iterations.",
+            }
+        )
+
+    async def _llm_round(
+        self,
+        *,
+        input_payload: list[dict[str, Any]],
+        previous_response_id: str | None,
+        tools_arg: list[dict[str, Any]] | None,
+        tts: ClientConnection,
+    ) -> tuple[str, list[dict[str, Any]], str | None]:
+        """Stream one Responses API call.
+
+        Returns ``(text, tool_calls, response_id)``. ``tool_calls`` is
+        empty when the round finished with pure text.
+        """
+        kwargs: dict[str, Any] = {
+            "model": self.settings.openai_reasoning_model,
+            "input": input_payload,
+            "stream": True,
+        }
+        if tools_arg:
+            kwargs["tools"] = tools_arg
+        if previous_response_id:
+            kwargs["previous_response_id"] = previous_response_id
+
+        stream = await self.openai_client.responses.create(**kwargs)
+
+        text_parts: list[str] = []
+        # Function-call accumulators keyed by item_id.
+        fc_meta: dict[str, dict[str, Any]] = {}
+        fc_args: dict[str, list[str]] = {}
+        response_id: str | None = None
+
         async for event in stream:
             etype = getattr(event, "type", "")
-            if etype == "response.output_text.delta":
-                yield getattr(event, "delta", "") or ""
+            if etype == "response.created":
+                r = getattr(event, "response", None)
+                if r is not None:
+                    response_id = getattr(r, "id", None) or response_id
+            elif etype == "response.output_item.added":
+                item = getattr(event, "item", None)
+                if item is None:
+                    continue
+                if getattr(item, "type", "") == "function_call":
+                    item_id = getattr(item, "id", "") or ""
+                    fc_meta[item_id] = {
+                        "name": getattr(item, "name", "") or "",
+                        "call_id": getattr(item, "call_id", "")
+                        or item_id,
+                    }
+                    fc_args[item_id] = []
+            elif etype == "response.function_call_arguments.delta":
+                item_id = getattr(event, "item_id", "") or ""
+                delta = getattr(event, "delta", "") or ""
+                if item_id in fc_args:
+                    fc_args[item_id].append(delta)
+            elif etype == "response.output_text.delta":
+                delta = getattr(event, "delta", "") or ""
+                if not delta:
+                    continue
+                text_parts.append(delta)
+                await self._send_event(
+                    {"type": "assistant_text_delta", "delta": delta}
+                )
+                with suppress(Exception):
+                    await tts.send(
+                        json.dumps(
+                            {
+                                "text": delta,
+                                "try_trigger_generation": True,
+                            }
+                        )
+                    )
+            elif etype == "response.completed":
+                r = getattr(event, "response", None)
+                if r is not None:
+                    response_id = getattr(r, "id", None) or response_id
             elif etype == "response.error":
                 err = getattr(event, "error", None)
-                msg = getattr(err, "message", "LLM error")
+                msg = (
+                    getattr(err, "message", "LLM error")
+                    if err
+                    else "LLM error"
+                )
                 raise RuntimeError(msg)
-            # Other event types are ignored for this pipeline.
+            # Other event types (web_search_call.*, output_item.done, etc.)
+            # are ignored.
+
+        tool_calls: list[dict[str, Any]] = []
+        for item_id, meta in fc_meta.items():
+            raw_args = "".join(fc_args.get(item_id, []))
+            try:
+                parsed = json.loads(raw_args) if raw_args else {}
+            except json.JSONDecodeError:
+                parsed = {}
+            tool_calls.append(
+                {
+                    "item_id": item_id,
+                    "call_id": meta["call_id"],
+                    "name": meta["name"],
+                    "args": parsed,
+                    "args_raw": raw_args,
+                }
+            )
+
+        return "".join(text_parts), tool_calls, response_id
+
+    async def _dispatch_tool_calls(
+        self,
+        tool_calls: list[dict[str, Any]],
+        ctx: ExecutionContext,
+    ) -> list[dict[str, Any]]:
+        """Execute every tool call sequentially, emit lifecycle events,
+        and return the ``function_call_output`` items to feed back."""
+        outputs: list[dict[str, Any]] = []
+        async with session_scope() as db:
+            executor = ToolExecutor(db)
+            for tc in tool_calls:
+                name = tc["name"]
+                call_id = tc["call_id"]
+                args = tc["args"]
+                await self._send_event(
+                    {
+                        "type": "tool_call_started",
+                        "tool": name,
+                        "callId": call_id,
+                        "args": args,
+                    }
+                )
+                outcome = await executor.execute(
+                    tool_name=name, args=args, ctx=ctx
+                )
+
+                if isinstance(outcome, ToolResult):
+                    await self._send_event(
+                        {
+                            "type": "tool_call_completed",
+                            "tool": name,
+                            "callId": call_id,
+                            "content": outcome.content,
+                            "data": outcome.data,
+                            "error": outcome.error,
+                        }
+                    )
+                    outputs.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": outcome.to_llm_payload(),
+                        }
+                    )
+                elif isinstance(outcome, ToolDenied):
+                    await self._send_event(
+                        {
+                            "type": "tool_call_denied",
+                            "tool": name,
+                            "callId": call_id,
+                            "reason": outcome.reason,
+                        }
+                    )
+                    outputs.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": outcome.to_llm_payload(),
+                        }
+                    )
+                elif isinstance(outcome, ToolPending):
+                    # TODO(v0.3-pending-approval): surface the pending
+                    # call to the browser and await an approval response
+                    # over the same WebSocket. Until that ships, fail
+                    # closed so the model doesn't hang.
+                    await self._send_event(
+                        {
+                            "type": "tool_call_pending",
+                            "tool": name,
+                            "callId": call_id,
+                            "scopeKey": outcome.scope_key,
+                            "args": args,
+                            "note": "approval flow not implemented yet",
+                        }
+                    )
+                    outputs.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": call_id,
+                            "output": json.dumps(
+                                {
+                                    "error": True,
+                                    "pending": True,
+                                    "reason": (
+                                        "User approval required but the "
+                                        "approval flow is not yet wired."
+                                    ),
+                                }
+                            ),
+                        }
+                    )
+        return outputs
 
     # ------------------------------------------------------------------ TTS
 
@@ -392,6 +659,69 @@ class ElevenLabsOpenAISession:
                     await self.browser.send_bytes(pcm)
             if evt.get("isFinal"):
                 return
+
+    # --------------------------------------------------------------- memory
+
+    @staticmethod
+    def _with_recall(
+        history: list[dict[str, str]], recall_block: str | None
+    ) -> list[dict[str, str]]:
+        if not recall_block:
+            return history
+        # Insert the recall block immediately after the system prompt so
+        # it has near-identical weight without overwriting the base
+        # personality. The transient list is built per call; not stored.
+        out: list[dict[str, str]] = []
+        injected = False
+        for msg in history:
+            out.append(msg)
+            if not injected and msg.get("role") == "system":
+                out.append({"role": "system", "content": recall_block})
+                injected = True
+        return out
+
+    async def _record_turn(self, role: str, content: str) -> None:
+        if not self.memory_enabled:
+            return
+        try:
+            async with session_scope() as db:
+                svc = MemoryService(db=db, redis=get_redis())
+                await svc.record_turn(
+                    session_id=self.session_id,
+                    role=role,  # type: ignore[arg-type]
+                    content=content,
+                )
+        except Exception:
+            logger.exception("record_turn failed")
+
+    async def _recall(self, query: str) -> str | None:
+        if not self.memory_enabled:
+            return None
+        try:
+            async with session_scope() as db:
+                svc = MemoryService(db=db, redis=get_redis())
+                return await svc.recall_context_block(
+                    user_id=self.user_id, query=query
+                )
+        except Exception:
+            logger.exception("recall failed")
+            return None
+
+    async def _finalize_memory(self) -> None:
+        """Mark the session ended and schedule distillation. Idempotent."""
+        if not self.memory_enabled:
+            return
+        try:
+            async with session_scope() as db:
+                svc = MemoryService(db=db, redis=get_redis())
+                await svc.end_session(self.session_id)
+            async with session_scope() as db:
+                svc = MemoryService(db=db, redis=get_redis())
+                await svc.schedule_distill(
+                    session_id=self.session_id, user_id=self.user_id
+                )
+        except Exception:
+            logger.exception("finalize_memory failed")
 
     # ---------------------------------------------------------------- utils
 

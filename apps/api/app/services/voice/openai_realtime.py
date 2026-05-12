@@ -20,7 +20,11 @@ from app.schemas.voice import (
     VoiceProviderDescriptor,
     VoiceSessionRequest,
 )
-from app.services.voice.base import ProviderNotConfiguredError, VoiceProvider
+from app.services.voice.base import (
+    ProviderNotConfiguredError,
+    SessionContext,
+    VoiceProvider,
+)
 
 _OPENAI_SESSIONS_URL = "https://api.openai.com/v1/realtime/sessions"
 _OPENAI_REALTIME_URL = "https://api.openai.com/v1/realtime"
@@ -52,7 +56,7 @@ class OpenAIRealtimeProvider(VoiceProvider):
         )
 
     async def create_session(
-        self, req: VoiceSessionRequest
+        self, req: VoiceSessionRequest, ctx: SessionContext
     ) -> OpenAIRealtimeSession:
         settings = get_settings()
         if not settings.openai_api_key:
@@ -64,8 +68,8 @@ class OpenAIRealtimeProvider(VoiceProvider):
         voice = req.voice or settings.openai_realtime_voice
 
         payload: dict[str, object] = {"model": model, "voice": voice}
-        if req.instructions:
-            payload["instructions"] = req.instructions
+        if ctx.augmented_instructions:
+            payload["instructions"] = ctx.augmented_instructions
 
         headers = {
             "Authorization": f"Bearer {settings.openai_api_key}",
@@ -95,4 +99,5 @@ class OpenAIRealtimeProvider(VoiceProvider):
             clientSecret=client_secret.get("value", ""),
             expiresAt=int(client_secret.get("expires_at", 0)),
             realtimeUrl=_OPENAI_REALTIME_URL,
+            sessionId=str(ctx.session_id),
         )

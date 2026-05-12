@@ -18,7 +18,11 @@ from app.schemas.voice import (
     VoiceSettings,
 )
 from app.services.voice import ws_tokens
-from app.services.voice.base import ProviderNotConfiguredError, VoiceProvider
+from app.services.voice.base import (
+    ProviderNotConfiguredError,
+    SessionContext,
+    VoiceProvider,
+)
 from app.services.voice.elevenlabs_openai_session import (
     INPUT_SAMPLE_RATE,
     OUTPUT_SAMPLE_RATE,
@@ -46,7 +50,7 @@ class ElevenLabsOpenAIProvider(VoiceProvider):
         )
 
     async def create_session(
-        self, req: VoiceSessionRequest
+        self, req: VoiceSessionRequest, ctx: SessionContext
     ) -> ElevenLabsOpenAISession:
         settings = get_settings()
         missing = [
@@ -65,10 +69,13 @@ class ElevenLabsOpenAIProvider(VoiceProvider):
 
         vs = req.voice_settings or VoiceSettings()
         token = ws_tokens.mint(
-            instructions=req.instructions,
+            instructions=ctx.augmented_instructions,
             stability=vs.stability,
             similarity_boost=vs.similarity_boost,
             speed=vs.speed,
+            session_id=ctx.session_id,
+            user_id=ctx.user_id,
+            memory_enabled=ctx.memory_enabled,
         )
 
         # Browser supplies the absolute base; we only emit the relative
@@ -81,4 +88,5 @@ class ElevenLabsOpenAIProvider(VoiceProvider):
             outputSampleRate=OUTPUT_SAMPLE_RATE,
             reasoningModel=settings.openai_reasoning_model,
             voiceId=settings.elevenlabs_voice_id or "",
+            sessionId=str(ctx.session_id),
         )

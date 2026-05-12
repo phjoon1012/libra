@@ -12,13 +12,14 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.routes import health, memory, tools, voice
+from app.api.routes import health, integrations, memory, tools, voice
 from app.core.config import get_settings
+from app.services.tools import register_builtin_tools
 
 
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    # Place for future startup/shutdown (db pool, redis, provider clients).
+    register_builtin_tools()
     yield
 
 
@@ -44,6 +45,9 @@ def create_app() -> FastAPI:
     app.include_router(voice.router, prefix="/api/voice", tags=["voice"])
     app.include_router(memory.router, prefix="/api/memory", tags=["memory"])
     app.include_router(tools.router, prefix="/api/tools", tags=["tools"])
+    app.include_router(
+        integrations.router, prefix="/api/integrations", tags=["integrations"]
+    )
 
     return app
 

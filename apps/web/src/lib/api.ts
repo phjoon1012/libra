@@ -1,4 +1,7 @@
 import type {
+  MemoryFact,
+  MemoryFactListResponse,
+  SystemStatusResponse,
   VoiceProviderDescriptor,
   VoiceProviderId,
   VoiceSessionResponse,
@@ -34,6 +37,7 @@ export async function createVoiceSession(
     voice?: string;
     instructions?: string;
     voiceSettings?: VoiceSettings;
+    memoryEnabled?: boolean;
   } = {},
 ): Promise<VoiceSessionResponse> {
   const resp = await fetch(`${API_BASE}/api/voice/session`, {
@@ -42,4 +46,113 @@ export async function createVoiceSession(
     body: JSON.stringify({ provider, ...options }),
   });
   return jsonOrThrow<VoiceSessionResponse>(resp);
+}
+
+export async function captureTurn(
+  sessionId: string,
+  role: "user" | "assistant",
+  content: string,
+): Promise<void> {
+  if (!content.trim()) return;
+  const resp = await fetch(
+    `${API_BASE}/api/voice/session/${sessionId}/turn`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, content }),
+    },
+  );
+  if (!resp.ok && resp.status !== 204) {
+    // Memory failures must not break the conversation; log and move on.
+    console.warn("captureTurn failed", resp.status);
+  }
+}
+
+export async function endVoiceSession(sessionId: string): Promise<void> {
+  await fetch(`${API_BASE}/api/voice/session/${sessionId}/end`, {
+    method: "POST",
+    keepalive: true,
+  }).catch(() => undefined);
+}
+
+export async function listMemoryFacts(opts: {
+  limit?: number;
+  offset?: number;
+} = {}): Promise<MemoryFactListResponse> {
+  const params = new URLSearchParams();
+  if (opts.limit != null) params.set("limit", String(opts.limit));
+  if (opts.offset != null) params.set("offset", String(opts.offset));
+  const resp = await fetch(
+    `${API_BASE}/api/memory/facts${params.toString() ? `?${params}` : ""}`,
+    { cache: "no-store" },
+  );
+  return jsonOrThrow<MemoryFactListResponse>(resp);
+}
+
+export async function searchMemoryFacts(
+  query: string,
+  topK = 10,
+): Promise<MemoryFact[]> {
+  const resp = await fetch(`${API_BASE}/api/memory/search`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ query, topK }),
+  });
+  return jsonOrThrow<MemoryFact[]>(resp);
+}
+
+export async function deleteMemoryFact(factId: string): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/memory/facts/${factId}`, {
+    method: "DELETE",
+  });
+  if (!resp.ok && resp.status !== 204) {
+    throw new Error(`Failed to delete fact: ${resp.status}`);
+  }
+}
+
+export async function createMemoryFact(
+  content: string,
+  importance = 3,
+): Promise<MemoryFact> {
+  const resp = await fetch(`${API_BASE}/api/memory/facts`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ content, importance }),
+  });
+  return jsonOrThrow<MemoryFact>(resp);
+}
+
+export async function fetchSystemStatus(): Promise<SystemStatusResponse> {
+  const resp = await fetch(`${API_BASE}/api/status`, { cache: "no-store" });
+  return jsonOrThrow<SystemStatusResponse>(resp);
+}
+
+export interface SpotifyStatus {
+  configured: boolean;
+  connected: boolean;
+  spotifyUserId?: string;
+  displayName?: string | null;
+  product?: string | null;
+  scope?: string;
+  connectedAt?: string;
+}
+
+export async function fetchSpotifyStatus(): Promise<SpotifyStatus> {
+  const resp = await fetch(`${API_BASE}/api/integrations/spotify/status`, {
+    cache: "no-store",
+  });
+  return jsonOrThrow<SpotifyStatus>(resp);
+}
+
+export function spotifyConnectUrl(): string {
+  return `${API_BASE}/api/integrations/spotify/auth/start`;
+}
+
+export async function disconnectSpotify(): Promise<void> {
+  const resp = await fetch(`${API_BASE}/api/integrations/spotify/disconnect`, {
+    method: "POST",
+  });
+  if (!resp.ok) {
+    throw new Error(`Spotify disconnect failed (${resp.status})`);
+  }
 }

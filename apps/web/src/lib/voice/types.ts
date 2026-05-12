@@ -41,6 +41,8 @@ export interface VoiceClientOptions {
   voiceSettings?: VoiceSettings;
   /** Live deviceIds; null/undefined = use system default. */
   audioDevices?: ResolvedAudioDevices;
+  /** When false, backend skips recall, turn capture, and distillation. */
+  memoryEnabled?: boolean;
 }
 
 export type VoiceClientFactory = (opts: VoiceClientOptions) => VoiceClient;
