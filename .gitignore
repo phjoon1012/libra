@@ -1,0 +1,41 @@
+# Node
+node_modules/
+.next/
+out/
+dist/
+.turbo/
+.pnpm-store/
+*.tsbuildinfo
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.venv*/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# uv
+.uv/
+
+# Env
+.env
+.env.*.local
+.env.local
+
+# Editor
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Build / coverage
+coverage/
+*.log
+logs/
+
+# Docker
+postgres-data/
+redis-data/

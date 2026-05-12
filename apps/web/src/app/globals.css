@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+html,
+body {
+  background: #000;
+  color: #fafafa;
+  font-family:
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    "Inter",
+    "Segoe UI",
+    Roboto,
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.panel-title {
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: #737373;
+}
+
+::selection {
+  background: #fafafa;
+  color: #000;
+}
+
+input,
+select,
+textarea,
+button {
+  font: inherit;
+}

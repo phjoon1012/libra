@@ -1,0 +1,328 @@
+---
+description: Project rules for the LIBRA personal AI companion codebase
+globs:
+  - "**/*"
+alwaysApply: true
+---
+
+# LIBRA Project Rules
+
+## 1. Project Mission
+
+This repository is for a modular LIBRA personal AI companion.
+
+The assistant should eventually support:
+- natural realtime voice conversation
+- swappable voice providers
+- long-term and short-term memory
+- tool execution
+- browser and desktop control
+- smart home integration
+- Raspberry Pi voice satellites
+- Jetson/macOS vision
+- proactive but controlled assistance
+
+The current milestone is v0.1:
+- LIBRA-style frontend
+- OpenAI Realtime conversational voice path
+- clean provider abstraction
+- backend session endpoint
+- Dockerized development infrastructure
+- documentation
+
+Do not implement future modules unless explicitly requested.
+
+---
+
+## 2. Architecture Principles
+
+Use a central-orchestrator architecture.
+
+The assistant must be organized around these conceptual layers:
+
+1. UI Layer
+2. Voice Provider Layer
+3. LIBRA Core / Backend API
+4. Memory Layer
+5. Tool Layer
+6. Event Layer
+7. Device / Desktop / Vision Layer
+
+Never let every module call every other module directly.
+
+Preferred flow:
+
+UI or device event
+→ backend API / orchestrator
+→ provider, memory, or tool adapter
+→ response/event back to UI
+
+Avoid hidden cross-dependencies.
+
+---
+
+## 3. Current Tech Stack
+
+Frontend:
+- Next.js App Router
+- TypeScript
+- Tailwind CSS
+- Component-based UI
+
+Backend:
+- FastAPI
+- Python
+- Pydantic settings and schemas
+- Provider/service abstraction
+
+Infrastructure:
+- Docker Compose
+- Postgres, pgvector-ready
+- Redis
+
+Do not introduce major new frameworks without explaining why.
+
+---
+
+## 4. Voice Provider Rules
+
+Voice providers must be swappable.
+
+Supported conceptual providers:
+
+1. OpenAI Realtime
+   - Main v0.1 provider
+   - Browser/WebRTC-oriented
+   - Backend creates session/config
+   - Browser should not receive long-lived API keys
+
+2. ElevenLabs + OpenAI reasoning
+   - Scaffold only in v0.1
+   - Should remain behind the same provider abstraction
+   - Do not deeply couple it to UI components
+
+Provider-specific code belongs in:
+- frontend voice adapters
+- backend voice services
+
+Provider-specific code must not be spread randomly through UI components.
+
+---
+
+## 5. Security Rules
+
+Never commit secrets.
+
+Do not hard-code:
+- OpenAI API keys
+- ElevenLabs API keys
+- database passwords
+- tokens
+- local private paths
+- personal credentials
+
+Use:
+- .env
+- .env.example
+- typed settings classes
+
+Browser clients must not receive long-lived provider API keys.
+
+Any future tool that can perform real-world actions must go through a permission layer.
+
+High-risk actions must require explicit confirmation:
+- sending emails
+- sending messages
+- deleting files
+- buying items
+- posting online
+- changing account settings
+- running shell commands
+- controlling locks or sensitive smart-home devices
+
+---
+
+## 6. Editing Discipline
+
+Before editing:
+1. Inspect the relevant files.
+2. Identify the smallest safe change.
+3. Avoid unrelated refactors.
+4. Preserve existing behavior unless explicitly changing it.
+5. Update docs if architecture changes.
+
+Do not:
+- rewrite large parts of the app without need
+- move files casually
+- rename public interfaces without updating all references
+- create duplicate abstractions
+- add dependencies without justification
+- mix frontend, backend, and infra concerns in one file
+
+If a requested change seems broad, break it into phases.
+
+---
+
+## 7. Decision-making
+
+Before locking in an approach, **ask the user first** when a meaningful decision is required: more than one viable option exists for architecture, libraries, API or schema shape, UX behavior, security posture, scope, or other tradeoffs that are costly or awkward to reverse.
+
+Do:
+- state the options briefly and give a recommendation when you have one
+- wait for the user's choice, or explicit delegation such as "you decide," before implementing along one branch
+
+Do not silently choose among alternatives that materially affect the project.
+
+Purely mechanical work or following established patterns already visible in the codebase does not require asking.
+
+---
+
+## 8. File Organization Rules
+
+Frontend structure should remain clear:
+
+apps/web/src/
+  app/
+  components/
+    libra/
+    ui/
+  lib/
+    voice/
+    api/
+  types/
+  styles/
+
+Backend structure should remain clear:
+
+apps/api/app/
+  main.py
+  core/
+  api/
+    routes/
+  schemas/
+  services/
+    voice/
+    memory/
+    tools/
+  tests/
+
+Docs should live in:
+
+docs/
+  ARCHITECTURE.md
+  VOICE_PROVIDERS.md
+  MEMORY_POLICY.md
+  ROADMAP.md
+
+Avoid dumping code into root directories.
+
+---
+
+## 9. Documentation Rules
+
+Update documentation when changing:
+- architecture
+- voice provider behavior
+- environment variables
+- Docker services
+- API endpoints
+- setup steps
+- security model
+
+README.md should stay practical and setup-focused.
+
+ARCHITECTURE.md should explain how the system works.
+
+VOICE_PROVIDERS.md should explain provider tradeoffs and integration details.
+
+ROADMAP.md should track milestones without pretending future work is already implemented.
+
+---
+
+## 10. Code Quality Rules
+
+Frontend:
+- Use TypeScript.
+- Prefer typed props and explicit state names.
+- Keep components small.
+- Avoid giant all-in-one pages.
+- Keep provider logic out of presentation components.
+
+Backend:
+- Use type hints.
+- Use Pydantic schemas for request/response models.
+- Keep API routes thin.
+- Put business logic in services.
+- Keep provider-specific logic behind interfaces/classes.
+
+Testing:
+- Add tests for service logic where practical.
+- At minimum, keep health checks and smoke tests working.
+
+Formatting:
+- Use consistent formatting.
+- Do not introduce inconsistent styles.
+
+---
+
+## 11. Latency Rules
+
+The project prioritizes natural conversation latency.
+
+Do:
+- stream whenever possible
+- avoid unnecessary backend hops
+- keep OpenAI Realtime as the low-latency default
+- keep ElevenLabs path modular for quality/custom voice testing
+
+Do not:
+- wait for full long responses before speaking when streaming is possible
+- perform heavy memory/tool work on every short utterance
+- add slow blocking calls to the voice loop
+
+---
+
+## 12. Future Module Boundaries
+
+Do not implement these in v0.1 unless explicitly requested:
+
+- real long-term memory
+- Home Assistant control
+- desktop automation
+- browser automation
+- Jetson vision
+- Raspberry Pi satellites
+- proactive scheduling
+- OpenClaw integration
+- payment/purchase actions
+
+For now, create clean placeholders only.
+
+---
+
+## 13. Assistant Personality Direction
+
+The UI and prompts should support a calm, concise, useful assistant.
+
+Default behavior:
+- natural spoken responses
+- short answers unless asked for detail
+- no excessive enthusiasm
+- one follow-up question maximum
+- permission before real-world actions
+
+Do not make the assistant roleplay excessively.
+It should feel like a reliable operating assistant, not a fantasy chatbot.
+
+---
+
+## 14. Definition of Done
+
+A change is done only when:
+- code runs or is clearly scaffolded
+- environment variables are documented
+- Docker setup still makes sense
+- no secrets are committed
+- related docs are updated
+- no unrelated files were modified
+- future TODOs are clearly marked

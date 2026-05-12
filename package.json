@@ -1,0 +1,17 @@
+{
+  "name": "libra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "LIBRA - modular personal AI companion (v0.1 conversational shell)",
+  "packageManager": "pnpm@9.12.0",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "pnpm --filter @libra/web dev",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "format": "pnpm -r format",
+    "typecheck": "pnpm -r typecheck"
+  }
+}
