@@ -19,6 +19,7 @@ dependencies = [
     "pgvector>=0.3.0",
     "alembic>=1.13.0",
     "redis[hiredis]>=5.0.0",
+    "paho-mqtt>=2.1.0",
 ]
 
 [dependency-groups]

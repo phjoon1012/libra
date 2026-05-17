@@ -98,6 +98,19 @@ class Settings(BaseSettings):
         "OAuth callback. Typically the Libra UI origin.",
     )
 
+    # ---- Vision / MQTT (v0.4) ----------------------------------------------
+    vision_enabled: bool = Field(default=True, alias="LIBRA_VISION_ENABLED")
+    mqtt_host: str = Field(default="mosquitto", alias="LIBRA_MQTT_HOST")
+    mqtt_port: int = Field(default=1883, alias="LIBRA_MQTT_PORT")
+    mqtt_username: str = Field(default="", alias="LIBRA_MQTT_USERNAME")
+    mqtt_password: str = Field(default="", alias="LIBRA_MQTT_PASSWORD")
+    vision_topic_filter: str = Field(
+        default="libra/vision/+/detections", alias="LIBRA_VISION_TOPIC_FILTER"
+    )
+    vision_status_topic_filter: str = Field(
+        default="libra/vision/+/status", alias="LIBRA_VISION_STATUS_TOPIC_FILTER"
+    )
+
     # ---- Infrastructure ----------------------------------------------------
     database_url: str | None = Field(default=None, alias="DATABASE_URL")
     redis_url: str | None = Field(default=None, alias="REDIS_URL")

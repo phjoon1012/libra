@@ -1,6 +1,6 @@
 # Architecture
 
-This document describes the v0.3 system and the conceptual layers
+This document describes the v0.4 system and the conceptual layers
 everything else will plug into.
 
 ## Conceptual layers
@@ -22,14 +22,23 @@ everything else will plug into.
    └─────┬───────────────┬───────────────┬───────────────┬──────────┘
          │               │               │               │
    ┌─────▼─────┐  ┌──────▼──────┐  ┌─────▼─────┐  ┌──────▼──────┐
-   │  Memory   │  │   Tools     │  │   Voice   │  │ Event/Bus   │
-   │ (Redis +  │  │  (v0.3 +)   │  │ Providers │  │ (Redis +)   │
+   │  Memory   │  │   Tools     │  │   Voice   │  │ Event Layer │
+   │ (Redis +  │  │  (v0.3 +)   │  │ Providers │  │  (MQTT)     │
    │ pgvector) │  │             │  │           │  │             │
-   └───────────┘  └─────────────┘  └───────────┘  └─────────────┘
-                                         │
-                                         │ ephemeral client_secret
-                                         ▼
-                                  OpenAI Realtime
+   └───────────┘  └─────────────┘  └───────────┘  └──────▲──────┘
+                                         │              │
+                                         │              │ libra/vision/+/detections
+                                         ▼              │
+                                  OpenAI Realtime       │
+                                                ┌───────┴────────┐
+                                                │ Mosquitto      │
+                                                │ broker         │
+                                                └───────▲────────┘
+                                                        │ publish
+                                          ┌─────────────┴─────────────┐
+                                          │  services/vision (YOLO)   │
+                                          │  Mac webcam / Jetson cam  │
+                                          └───────────────────────────┘
 ```
 
 Rules of the road:
@@ -149,6 +158,47 @@ Browser shows each tool call inline in the transcript via
 `tool_call_started` / `tool_call_completed` / `tool_call_denied` events
 on the same WebSocket. See `docs/TOOLS.md` for full details.
 
+## Vision flow (v0.4)
+
+Vision lives outside the main API process — `services/vision/` is its
+own Python project deployable on the developer Mac OR a Jetson Nano
+satellite. It pushes events through MQTT rather than calling into the
+brain directly, so multiple sources can come online and offline without
+coupling.
+
+```text
+[camera] ─► YOLO (Ultralytics, MPS/CUDA/CPU)
+              │
+              ▼
+         class filter (e.g. person)
+              │
+              ▼
+         emission policy
+            (on_change | throttled | both)
+              │
+              ▼
+         MQTT publish ─► libra/vision/{source}/detections   (per event)
+                     └─► libra/vision/{source}/status       (retained;
+                                                              LWT = "offline")
+                              │
+                              ▼
+                  ┌─────────────────────────────┐
+                  │ Mosquitto broker (Docker)   │
+                  └─────────────────────────────┘
+                              │
+                              ▼
+                  Brain API: VisionEventBridge subscribes,
+                  logs `vision event (mac-webcam/change): 1 person …`
+                  to API stdout. Future handlers (memory write,
+                  in-process bus, dashboard) plug in here.
+```
+
+Topics live under `libra/vision/+/{detections,status}`. The retained
+status topic plus the broker's Last-Will-and-Testament feature means
+the brain always has an authoritative "is this camera alive?" view
+even if a Jetson crashes or its wifi drops. See
+`services/vision/README.md` for the deployable details.
+
 ## Frontend module map
 
 ```text
@@ -177,7 +227,9 @@ apps/web/src/
   All currently-shipped tools are `autorun` (consent for Spotify is the
   OAuth connection itself).
 - No `fetch_url` or `read_file` yet — both land in v0.3.1.
-- No desktop/browser automation, smart home, Pi satellite, or vision.
+- Vision currently only **logs** events. No persistence, no
+  memory injection, no UI surfaced — that's v0.4.x.
+- No desktop/browser automation, smart home, or Pi satellite yet.
 - No auth/user model. Single-user, local-only. The `facts.user_id`,
   `tool_permissions.user_id`, and `spotify_accounts.user_id` columns
   exist so multi-user can land non-destructively later.

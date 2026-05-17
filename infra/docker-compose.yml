@@ -32,6 +32,27 @@ services:
       timeout: 3s
       retries: 10
 
+  mosquitto:
+    # MQTT broker for device/edge → brain event publication. Used by
+    # services/vision (and future Pi satellite, smart-home, etc).
+    # v0 runs unauthenticated on the loopback / local network — see
+    # mosquitto.conf for the listener config. Lock down before exposing
+    # publicly.
+    image: eclipse-mosquitto:2
+    restart: unless-stopped
+    ports:
+      - "1883:1883"  # plain MQTT
+      - "9001:9001"  # MQTT over websockets (for future browser dashboards)
+    volumes:
+      - ./mosquitto/mosquitto.conf:/mosquitto/config/mosquitto.conf:ro
+      - mosquitto-data:/mosquitto/data
+      - mosquitto-log:/mosquitto/log
+    healthcheck:
+      test: ["CMD-SHELL", "mosquitto_sub -h localhost -t '$$SYS/broker/version' -C 1 -W 2 || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
   api:
     build:
       context: ../apps/api
@@ -48,6 +69,8 @@ services:
       postgres:
         condition: service_healthy
       redis:
+        condition: service_healthy
+      mosquitto:
         condition: service_healthy
     volumes:
       - ../apps/api:/app
@@ -87,3 +110,5 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  mosquitto-data:
+  mosquitto-log:

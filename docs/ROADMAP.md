@@ -36,7 +36,7 @@ makes sense, and the relevant doc is updated.
 - [x] Memory view in the dashboard (list, search, delete, manual add)
 - [x] Memory on/off toggle per session
 
-## v0.3 — Tools  *(current)*
+## v0.3 — Tools
 
 ### v0.3.0 — shipped
 
@@ -54,36 +54,50 @@ makes sense, and the relevant doc is updated.
 - [x] Docs + .env.example + Alembic migrations for `tool_permissions` and
       `spotify_accounts`
 
-### v0.3.1 — next
+### v0.3.1 — later
 
 - [ ] OpenAI Realtime tool relay (browser forwards function calls → backend)
 - [ ] Approval-await loop for `default_policy="ask"` tools (chip UI)
 - [ ] `fetch_url` and sandboxed `read_file`
 - [ ] Spotify Web Playback SDK so the Libra tab itself is a play target
 
-## v0.4 — Desktop control
+## v0.4 — Vision  *(current)*
+
+### v0.4.0 — shipped
+
+- [x] `services/vision/` Python project (Ultralytics YOLO + OpenCV + paho-mqtt)
+- [x] Mosquitto broker in `infra/docker-compose.yml`
+- [x] Topics: `libra/vision/{source}/detections` + retained `…/status`
+      (with LWT-driven `offline` state on disconnect)
+- [x] Emission policies: `on_change`, `throttled`, `both`
+- [x] Backend MQTT bridge logs incoming detections to API stdout
+- [x] Same code runs on Mac (developer webcam) and Jetson Nano
+
+### v0.4.x — next
+
+- [ ] Persist events to Postgres for later replay / memory recall
+- [ ] In-process event bus on the API so multiple modules can subscribe
+- [ ] Optional dashboard panel showing last-N vision events
+- [ ] TensorRT export path for Jetson (`yolo export … format=engine`)
+- [ ] MQTT auth (password file + TLS) before exposing the broker off-host
+
+## v0.5 — Desktop control
 
 - [ ] Local desktop agent in `services/desktop-agent`
 - [ ] Pairing flow with the backend
 - [ ] Safe action surface: open app, focus window, type text (gated)
 
-## v0.5 — Home Assistant
+## v0.6 — Home Assistant
 
 - [ ] Home Assistant adapter behind the tool layer
 - [ ] Entity discovery + per-entity permissions
 - [ ] No control of locks / alarms / cameras without explicit, scoped consent
 
-## v0.6 — Raspberry Pi voice satellite
+## v0.7 — Raspberry Pi voice satellite
 
 - [ ] Wake-word + audio capture on the Pi
 - [ ] Streaming audio over LAN to LIBRA core
 - [ ] Multi-satellite session arbitration
-
-## v0.7 — Jetson / on-device vision
-
-- [ ] Local vision worker
-- [ ] Scene description and presence detection events on the bus
-- [ ] Privacy controls: per-camera enable, recording policy
 
 ## Cross-cutting (any version)
 
