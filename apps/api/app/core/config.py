@@ -48,7 +48,7 @@ class Settings(BaseSettings):
         default="gpt-4.1-mini", alias="OPENAI_REASONING_MODEL"
     )
     openai_transcription_model: str = Field(
-        default="gpt-4o-mini-transcribe", alias="OPENAI_TRANSCRIPTION_MODEL"
+        default="gpt-realtime-whisper", alias="OPENAI_TRANSCRIPTION_MODEL"
     )
 
     # ---- Memory (v0.2) -----------------------------------------------------

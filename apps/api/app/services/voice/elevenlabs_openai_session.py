@@ -159,28 +159,34 @@ class ElevenLabsOpenAISession:
     # ------------------------------------------------------------------ STT
 
     async def _open_stt(self) -> None:
-        url = f"{_OPENAI_REALTIME_WS}?intent=transcription"
+        # GA Realtime API — no OpenAI-Beta header, no ?intent=transcription.
         headers = {
             "Authorization": f"Bearer {self.settings.openai_api_key}",
-            "OpenAI-Beta": "realtime=v1",
         }
-        self.stt = await websockets.connect(url, additional_headers=headers)
+        self.stt = await websockets.connect(
+            _OPENAI_REALTIME_WS, additional_headers=headers
+        )
 
-        # Configure transcription-only session: VAD on, no model responses.
+        # Transcription-only session: VAD on, no spoken model responses.
         await self.stt.send(
             json.dumps(
                 {
-                    "type": "transcription_session.update",
+                    "type": "session.update",
                     "session": {
-                        "input_audio_format": "pcm16",
-                        "input_audio_transcription": {
-                            "model": self.settings.openai_transcription_model,
-                        },
-                        "turn_detection": {
-                            "type": "server_vad",
-                            "threshold": 0.5,
-                            "prefix_padding_ms": 250,
-                            "silence_duration_ms": 600,
+                        "type": "transcription",
+                        "audio": {
+                            "input": {
+                                "format": {"type": "audio/pcm", "rate": 16000},
+                                "transcription": {
+                                    "model": self.settings.openai_transcription_model,
+                                },
+                                "turn_detection": {
+                                    "type": "server_vad",
+                                    "threshold": 0.5,
+                                    "prefix_padding_ms": 250,
+                                    "silence_duration_ms": 600,
+                                },
+                            }
                         },
                     },
                 }

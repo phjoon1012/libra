@@ -325,19 +325,15 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
 
-      log("7/8 POSTing SDP to OpenAI…");
-      const sdpResp = await fetch(
-        `${session.realtimeUrl}?model=${encodeURIComponent(session.model)}`,
-        {
-          method: "POST",
-          body: offer.sdp,
-          headers: {
-            Authorization: `Bearer ${session.clientSecret}`,
-            "Content-Type": "application/sdp",
-            "OpenAI-Beta": "realtime=v1",
-          },
+      log("7/8 POSTing SDP to OpenAI (GA /v1/realtime/calls)…");
+      const sdpResp = await fetch(session.realtimeUrl, {
+        method: "POST",
+        body: offer.sdp,
+        headers: {
+          Authorization: `Bearer ${session.clientSecret}`,
+          "Content-Type": "application/sdp",
         },
-      );
+      });
       if (!sdpResp.ok) {
         const detail = await sdpResp.text().catch(() => sdpResp.statusText);
         throw new Error(`OpenAI Realtime SDP exchange failed: ${detail}`);

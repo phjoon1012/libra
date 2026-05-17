@@ -20,8 +20,9 @@ files. Nothing else should change.
 
 | Stage         | Where                                          |
 | ------------- | ---------------------------------------------- |
-| Session mint  | Backend `POST /v1/realtime/sessions`           |
+| Session mint  | Backend `POST /v1/realtime/client_secrets`     |
 | Token         | Short-lived `client_secret` returned to browser|
+| WebRTC SDP    | Browser `POST /v1/realtime/calls`              |
 | Media         | Browser WebRTC peer connection to OpenAI       |
 | Events        | Data channel (`oai-events`)                    |
 
@@ -58,7 +59,7 @@ PCM transport plus a small JSON event channel.
 
 | Stage     | Where                                                          |
 | --------- | -------------------------------------------------------------- |
-| STT       | `wss://api.openai.com/v1/realtime?intent=transcription` (server VAD) |
+| STT       | `wss://api.openai.com/v1/realtime` + `session.update` (`type: transcription`, server VAD) |
 | Reasoning | OpenAI Responses API, streaming                                |
 | TTS       | `wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input` |
 | Glue      | `apps/api/app/services/voice/elevenlabs_openai_session.py`     |
@@ -76,7 +77,7 @@ PCM transport plus a small JSON event channel.
 ```env
 OPENAI_API_KEY=sk-...
 OPENAI_REASONING_MODEL=gpt-4.1-mini
-OPENAI_TRANSCRIPTION_MODEL=gpt-4o-mini-transcribe
+OPENAI_TRANSCRIPTION_MODEL=gpt-realtime-whisper
 
 ELEVENLABS_API_KEY=...
 ELEVENLABS_VOICE_ID=...           # required

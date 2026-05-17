@@ -55,11 +55,11 @@ Rules of the road:
 1. Browser POSTs `{ provider: "openai-realtime", voice, instructions }`
    to `/api/voice/session`.
 2. Backend looks up the provider via the registry, calls OpenAI's
-   `POST /v1/realtime/sessions`, and returns `{ clientSecret, model,
+   `POST /v1/realtime/client_secrets`, and returns `{ clientSecret, model,
    voice, realtimeUrl, expiresAt }`.
 3. Browser opens `RTCPeerConnection`, attaches the mic track, creates a
    data channel, generates an SDP offer.
-4. Browser POSTs the SDP to `https://api.openai.com/v1/realtime?model=...`
+4. Browser POSTs the SDP to `https://api.openai.com/v1/realtime/calls`
    with `Authorization: Bearer <clientSecret>`.
 5. Browser sets OpenAI's SDP answer as the remote description; remote
    audio track is wired to an `<audio>` element.
