@@ -59,7 +59,7 @@ PCM transport plus a small JSON event channel.
 
 | Stage     | Where                                                          |
 | --------- | -------------------------------------------------------------- |
-| STT       | `wss://api.openai.com/v1/realtime` + `session.update` (`type: transcription`, server VAD) |
+| STT       | GA `client_secrets` (`type: transcription`) + `wss://…/realtime` (no `?model=`; 24 kHz PCM, browser VAD) |
 | Reasoning | OpenAI Responses API, streaming                                |
 | TTS       | `wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input` |
 | Glue      | `apps/api/app/services/voice/elevenlabs_openai_session.py`     |

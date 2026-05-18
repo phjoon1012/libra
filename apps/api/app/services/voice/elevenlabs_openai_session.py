@@ -2,7 +2,7 @@
 
 Pipeline:
 
-    browser mic PCM ──► backend WS ──► OpenAI Realtime (STT-only, server VAD)
+    browser mic PCM ──► backend WS ──► OpenAI Realtime (STT, browser VAD → commit)
                                            │
                                            ▼ user_speech_started → barge-in
                                            ▼ final transcript
@@ -38,6 +38,7 @@ import uuid
 from contextlib import suppress
 from typing import Any
 
+import httpx
 import websockets
 from fastapi import WebSocket, WebSocketDisconnect
 from openai import AsyncOpenAI
@@ -59,10 +60,15 @@ from app.services.tools import (
 
 logger = logging.getLogger(__name__)
 
-INPUT_SAMPLE_RATE = 16_000  # mic PCM 16-bit LE
+INPUT_SAMPLE_RATE = 24_000  # mic PCM 16-bit LE (GA Realtime transcription expects 24 kHz)
 OUTPUT_SAMPLE_RATE = 16_000  # ElevenLabs pcm_16000
 
 _OPENAI_REALTIME_WS = "wss://api.openai.com/v1/realtime"
+_OPENAI_CLIENT_SECRETS_URL = "https://api.openai.com/v1/realtime/client_secrets"
+
+# GA Realtime ``type: transcription`` sessions (see OpenAI Realtime transcription guide).
+# ``gpt-4o-mini-transcribe`` and other file/batch STT models are not valid here.
+_TRANSCRIPTION_MODE_MODELS = frozenset({"gpt-realtime-whisper"})
 _ELEVEN_TTS_WS = (
     "wss://api.elevenlabs.io/v1/text-to-speech/{voice_id}/stream-input"
     "?model_id={model_id}&output_format=pcm_16000"
@@ -159,42 +165,64 @@ class ElevenLabsOpenAISession:
     # ------------------------------------------------------------------ STT
 
     async def _open_stt(self) -> None:
-        # GA Realtime API — no OpenAI-Beta header, no ?intent=transcription.
-        headers = {
-            "Authorization": f"Bearer {self.settings.openai_api_key}",
-        }
-        self.stt = await websockets.connect(
-            _OPENAI_REALTIME_WS, additional_headers=headers
-        )
-
-        # Transcription-only session: VAD on, no spoken model responses.
-        await self.stt.send(
-            json.dumps(
-                {
-                    "type": "session.update",
-                    "session": {
-                        "type": "transcription",
-                        "audio": {
-                            "input": {
-                                "format": {"type": "audio/pcm", "rate": 16000},
-                                "transcription": {
-                                    "model": self.settings.openai_transcription_model,
-                                },
-                                "turn_detection": {
-                                    "type": "server_vad",
-                                    "threshold": 0.5,
-                                    "prefix_padding_ms": 250,
-                                    "silence_duration_ms": 600,
-                                },
-                            }
-                        },
-                    },
-                }
+        # GA Realtime: mint transcription client_secret, then WebSocket (no ?model=).
+        model = self.settings.openai_transcription_model
+        if model not in _TRANSCRIPTION_MODE_MODELS:
+            supported = ", ".join(sorted(_TRANSCRIPTION_MODE_MODELS))
+            raise RuntimeError(
+                f"OPENAI_TRANSCRIPTION_MODEL={model!r} is not supported for GA "
+                f"Realtime transcription mode. Use one of: {supported}. "
+                "(gpt-4o-mini-transcribe is for the Audio API, not this WebSocket path.)"
             )
-        )
+
+        # gpt-realtime-whisper does not support server VAD; the browser runs
+        # energy VAD and sends commit via control messages.
+        session_config: dict[str, object] = {
+            "type": "transcription",
+            "audio": {
+                "input": {
+                    "format": {"type": "audio/pcm", "rate": INPUT_SAMPLE_RATE},
+                    "transcription": {"model": model},
+                    "turn_detection": None,
+                }
+            },
+        }
+        payload = {"session": session_config}
+
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            resp = await client.post(
+                _OPENAI_CLIENT_SECRETS_URL,
+                headers={
+                    "Authorization": f"Bearer {self.settings.openai_api_key}",
+                    "Content-Type": "application/json",
+                },
+                json=payload,
+            )
+            if resp.status_code >= 400:
+                body = resp.text
+                logger.error(
+                    "OpenAI STT client_secret failed: status=%s body=%s payload=%s",
+                    resp.status_code,
+                    body,
+                    payload,
+                )
+                raise RuntimeError(f"OpenAI {resp.status_code}: {body}")
+            data = resp.json()
+
+        token = data.get("value", "")
+        if not token:
+            legacy = data.get("client_secret")
+            if isinstance(legacy, dict):
+                token = legacy.get("value", "")
+        if not token:
+            raise RuntimeError("OpenAI client_secrets response missing value")
+
+        # Transcription sessions: model is set in client_secrets only — no ?model= on WS.
+        ws_headers = {"Authorization": f"Bearer {token}"}
+        self.stt = await websockets.connect(_OPENAI_REALTIME_WS, additional_headers=ws_headers)
 
     async def _pump_browser_to_stt(self) -> None:
-        """Browser binary frames are PCM 16-bit LE mono at 16kHz; forward to STT."""
+        """Browser binary frames are PCM 16-bit LE mono at 24kHz; forward to STT."""
         while not self._stop.is_set():
             try:
                 msg = await self.browser.receive()
@@ -225,6 +253,16 @@ class ElevenLabsOpenAISession:
         if kind == "interrupt":
             await self._cancel_response()
             await self._send_event({"type": "flush_audio"})
+        elif kind == "vad":
+            speaking = evt.get("speaking")
+            if speaking is True:
+                await self._cancel_response()
+                await self._send_event(
+                    {"type": "user_speech_started", "flush_audio": True}
+                )
+            elif speaking is False and self.stt is not None:
+                await self.stt.send(json.dumps({"type": "input_audio_buffer.commit"}))
+                await self._send_event({"type": "user_speech_stopped"})
 
     async def _pump_stt_events(self) -> None:
         if self.stt is None:

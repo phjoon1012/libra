@@ -14,7 +14,7 @@ import type { LevelListener, VoiceClient, VoiceClientOptions } from "./types";
  *
  *   1. Ask backend for a session config (ws URL + sample rates).
  *   2. Open WebSocket to backend.
- *   3. Capture mic, downsample to 16 kHz PCM16 in an AudioWorklet,
+ *   3. Capture mic, downsample to 24 kHz PCM16 in an AudioWorklet,
  *      send binary frames over the WS.
  *   4. Receive binary PCM frames from backend, schedule playback
  *      via AudioBufferSourceNode chain into an analyser tap so the
@@ -276,13 +276,26 @@ export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceCli
     await audioCtx.audioWorklet.addModule("/pcm-mic-worklet.js");
     micSource = audioCtx.createMediaStreamSource(micStream);
     micWorklet = new AudioWorkletNode(audioCtx, "pcm-mic-processor", {
-      processorOptions: { targetRate: 16000, chunkMs: 100 },
+      processorOptions: { targetRate: 24000, chunkMs: 100 },
       numberOfInputs: 1,
       numberOfOutputs: 0,
     });
-    micWorklet.port.onmessage = (e: MessageEvent<ArrayBuffer>) => {
-      if (muted) return;
-      if (ws && ws.readyState === WebSocket.OPEN) ws.send(e.data);
+    micWorklet.port.onmessage = (e: MessageEvent<ArrayBuffer | { type: string; speaking?: boolean }>) => {
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      const data = e.data;
+      if (data instanceof ArrayBuffer) {
+        if (muted) return;
+        ws.send(data);
+        return;
+      }
+      if (
+        data &&
+        typeof data === "object" &&
+        data.type === "vad" &&
+        typeof data.speaking === "boolean"
+      ) {
+        ws.send(JSON.stringify({ type: "vad", speaking: data.speaking }));
+      }
     };
     micSource.connect(micWorklet);
   };
@@ -427,8 +440,7 @@ export function createElevenLabsOpenAIClient(opts: VoiceClientOptions): VoiceCli
 
   const setMuted = (next: boolean) => {
     muted = next;
-    // Mic track stays open; we just stop sending frames. This keeps STT
-    // VAD state consistent on the backend.
+    // Mic track stays open; we just stop sending PCM (browser VAD pauses too).
   };
 
   const interrupt = () => {
