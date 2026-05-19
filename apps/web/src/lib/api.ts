@@ -156,3 +156,30 @@ export async function disconnectSpotify(): Promise<void> {
     throw new Error(`Spotify disconnect failed (${resp.status})`);
   }
 }
+
+export interface ToolExecuteResult {
+  status: "ok" | "error" | "pending" | "denied";
+  tool_name: string;
+  request_id: string;
+  content?: string;
+  data?: unknown;
+  error?: boolean;
+  reason?: string;
+}
+
+export async function executeTool(
+  toolName: string,
+  args: Record<string, unknown>,
+  sessionId?: string | null,
+): Promise<ToolExecuteResult> {
+  const resp = await fetch(`${API_BASE}/api/tools/execute`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      tool_name: toolName,
+      args,
+      session_id: sessionId ?? undefined,
+    }),
+  });
+  return jsonOrThrow<ToolExecuteResult>(resp);
+}

@@ -1,4 +1,4 @@
-import { captureTurn, createVoiceSession, endVoiceSession } from "@/lib/api";
+import { captureTurn, createVoiceSession, endVoiceSession, executeTool } from "@/lib/api";
 import type {
   ConnectionState,
   OpenAIRealtimeSession,
@@ -38,6 +38,9 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
   let state: ConnectionState = "disconnected";
   let sessionId: string | null = null;
   let pendingAssistantText = "";
+
+  // callId → tool name; populated on response.output_item.added (function_call items)
+  const pendingCalls = new Map<string, string>();
 
   function setState(next: ConnectionState) {
     if (next === state) return;
@@ -125,6 +128,26 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
     audioCtx = null;
   }
 
+  async function handleToolCall(callId: string, name: string, rawArgs: string) {
+    let args: Record<string, unknown> = {};
+    try { args = JSON.parse(rawArgs); } catch { /* ignore */ }
+
+    let output: string;
+    try {
+      const result = await executeTool(name, args, sessionId);
+      output = result.content || (result.status === "ok" ? "Done." : `Tool failed: ${result.reason ?? "unknown"}`);
+    } catch (err) {
+      output = `Tool error: ${String(err)}`;
+    }
+
+    if (!dc || dc.readyState !== "open") return;
+    dc.send(JSON.stringify({
+      type: "conversation.item.create",
+      item: { type: "function_call_output", call_id: callId, output },
+    }));
+    dc.send(JSON.stringify({ type: "response.create" }));
+  }
+
   function handleEvent(evt: Record<string, unknown>) {
     const type = evt.type as string | undefined;
     if (!type) return;
@@ -166,6 +189,22 @@ export function createOpenAIRealtimeClient(opts: VoiceClientOptions): VoiceClien
           emit({ role: "user", text });
           if (sessionId && memoryEnabled !== false)
             captureTurn(sessionId, "user", text);
+        }
+        break;
+      }
+      case "response.output_item.added": {
+        const item = evt.item as Record<string, unknown> | undefined;
+        if (item?.type === "function_call") {
+          pendingCalls.set(item.call_id as string, item.name as string);
+        }
+        break;
+      }
+      case "response.function_call_arguments.done": {
+        const callId = evt.call_id as string;
+        const name = pendingCalls.get(callId);
+        if (name) {
+          pendingCalls.delete(callId);
+          void handleToolCall(callId, name, (evt.arguments as string) ?? "{}");
         }
         break;
       }

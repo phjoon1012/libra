@@ -15,6 +15,7 @@ import logging
 import httpx
 
 from app.core.config import get_settings
+from app.services.tools import get_registry, register_builtin_tools
 from app.schemas.voice import (
     OpenAIRealtimeSession,
     VoiceProviderDescriptor,
@@ -67,6 +68,22 @@ class OpenAIRealtimeProvider(VoiceProvider):
         model = settings.openai_realtime_model
         voice = req.voice or settings.openai_realtime_voice
 
+        register_builtin_tools()
+        _spotify_tool_names = [
+            "spotify_search",
+            "spotify_play",
+            "spotify_pause",
+            "spotify_resume",
+            "spotify_skip",
+            "spotify_now_playing",
+        ]
+        registry = get_registry()
+        tools: list[object] = [
+            t.to_openai_tool()
+            for name in _spotify_tool_names
+            if (t := registry.get(name)) is not None
+        ]
+
         session_config: dict[str, object] = {
             "type": "realtime",
             "model": model,
@@ -74,6 +91,9 @@ class OpenAIRealtimeProvider(VoiceProvider):
         }
         if ctx.augmented_instructions:
             session_config["instructions"] = ctx.augmented_instructions
+        if tools:
+            session_config["tools"] = tools
+            session_config["tool_choice"] = "auto"
 
         payload = {"session": session_config}
 
